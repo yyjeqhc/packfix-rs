@@ -1,0 +1,11 @@
+target/
+logs/
+workspaces/
+*.log
+.env
+read.txt
+packfix.toml
+home*/*
+output.txt
+*.patch
+old/*

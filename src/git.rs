@@ -1,0 +1,180 @@
+use std::{path::Path, time::Duration};
+
+use anyhow::{Context, Result};
+
+use crate::utils::command::{CommandSpec, run_command};
+
+pub fn checkout(repo_dir: &Path, branch: &str) -> Result<()> {
+    run_git(repo_dir, &["checkout", branch], "checkout")
+}
+
+pub fn create_branch(repo_dir: &Path, branch: &str) -> Result<()> {
+    run_git(repo_dir, &["checkout", "-b", branch], "create_branch")
+}
+
+pub fn add(repo_dir: &Path, paths: &[&str]) -> Result<()> {
+    let mut args = vec!["add"];
+    args.extend_from_slice(paths);
+    run_git(repo_dir, &args, "add")
+}
+
+pub fn commit(repo_dir: &Path, message: &str) -> Result<()> {
+    run_git(
+        repo_dir,
+        &["commit", "--no-verify", "-m", message],
+        "commit",
+    )
+}
+
+pub fn push(repo_dir: &Path, remote: &str, branch: &str) -> Result<()> {
+    run_git(repo_dir, &["push", remote, branch], "push")
+}
+
+pub fn branch_exists(repo_dir: &Path, branch: &str) -> Result<bool> {
+    let result = run_git_capture(
+        repo_dir,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+        "branch_exists",
+    )?;
+    Ok(result.returncode == 0)
+}
+
+pub fn checkout_or_create_branch(repo_dir: &Path, branch: &str) -> Result<()> {
+    if branch_exists(repo_dir, branch)? {
+        checkout(repo_dir, branch)
+    } else {
+        create_branch(repo_dir, branch)
+    }
+}
+
+pub fn has_staged_changes(repo_dir: &Path) -> Result<bool> {
+    let result = run_git_capture(
+        repo_dir,
+        &["diff", "--cached", "--quiet", "--exit-code"],
+        "has_staged_changes",
+    )?;
+    match result.returncode {
+        0 => Ok(false),
+        1 => Ok(true),
+        code => anyhow::bail!(
+            "git diff --cached failed in {} with rc={code}: {}",
+            repo_dir.display(),
+            result.stderr
+        ),
+    }
+}
+
+pub fn commit_if_staged(repo_dir: &Path, message: &str) -> Result<bool> {
+    if !has_staged_changes(repo_dir)? {
+        return Ok(false);
+    }
+    commit(repo_dir, message)?;
+    Ok(true)
+}
+
+fn run_git(repo_dir: &Path, args: &[&str], operation: &str) -> Result<()> {
+    let result = run_git_capture(repo_dir, args, operation)?;
+    if result.returncode != 0 {
+        anyhow::bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            if result.stderr.trim().is_empty() {
+                result.stdout.trim()
+            } else {
+                result.stderr.trim()
+            }
+        );
+    }
+    Ok(())
+}
+
+fn run_git_capture(
+    repo_dir: &Path,
+    args: &[&str],
+    operation: &str,
+) -> Result<crate::utils::command::CommandResult> {
+    run_command(CommandSpec {
+        program: "git".into(),
+        args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        cwd: Some(repo_dir.to_path_buf()),
+        timeout: Duration::from_secs(300),
+        log_path: repo_dir.join("logs").join(format!("git_{operation}.log")),
+    })
+    .with_context(|| format!("git {} failed in {}", args.join(" "), repo_dir.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    fn init_repo() -> tempfile::TempDir {
+        let dir = tempdir().expect("tempdir");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .output()
+            .expect("git config email");
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .output()
+            .expect("git config name");
+        std::fs::write(dir.path().join("README.md"), "hello\n").expect("write readme");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .expect("git commit");
+        dir
+    }
+
+    #[test]
+    fn checkout_or_create_branch_existing_branch() {
+        let dir = init_repo();
+        checkout_or_create_branch(dir.path(), "feature").expect("create branch");
+        checkout(dir.path(), "master")
+            .or_else(|_| checkout(dir.path(), "main"))
+            .expect("checkout default branch");
+        checkout_or_create_branch(dir.path(), "feature").expect("reuse branch");
+        let output = Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(dir.path())
+            .output()
+            .expect("branch show-current");
+        let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(current, "feature");
+    }
+
+    #[test]
+    fn commit_if_staged_no_changes_returns_false() {
+        let dir = init_repo();
+        let committed = commit_if_staged(dir.path(), "no-op").expect("commit_if_staged");
+        assert!(!committed);
+    }
+
+    #[test]
+    fn commit_if_staged_with_changes_returns_true() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join("demo.txt"), "x\n").expect("write demo");
+        add(dir.path(), &["demo.txt"]).expect("git add");
+        let committed = commit_if_staged(dir.path(), "add demo").expect("commit_if_staged");
+        assert!(committed);
+    }
+}

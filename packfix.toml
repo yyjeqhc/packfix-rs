@@ -1,0 +1,47 @@
+[obs]
+api_url = "https://pickaxe.oerv.ac.cn/"
+default_project = "home:yyjeqhc:test"
+oscrc_path = "/root/.config/osc/oscrc"
+
+[repo]
+url = "https://github.com/yyjeqhc/openRuyi/"
+workdir = "/root/git/openruyi-repo"
+
+[llm]
+host = "http://100.65.29.50"
+port = 11434
+model = "qwen3.5:9b"
+
+[description]
+system_prompt = "You generate RPM spec file %description bodies for Python packages. Use only the provided package metadata, README excerpt, and module list. Do not invent unsupported facts. Output plain English text only. Do not output Markdown, bullets, headings, quotes, or the '%description' tag. Write in a concise downstream packaging style, not in marketing style."
+user_prompt = """
+Task: Generate RPM spec %description body.
+
+Extracted package information:
+{context}
+
+Hard requirements:
+- English only.
+- Output 1 to 5 lines.
+- Each line must be no longer than 100 characters.
+- Plain text only.
+- Do not include "%description".
+- Do not include a package name/version heading.
+- Do not mention sources, metadata, README, uncertainty, classifiers, or license.
+- Do not mention Python version requirements unless essential to the package purpose.
+- Avoid generic filler such as "various applications", "used by developers",
+  "advanced customization", "provides utilities", or "secure protocols".
+- Prefer concrete capabilities over broad claims.
+- Describe what the package provides and what it is used for.
+- The result should be suitable for direct insertion under an RPM spec %description.
+"""
+timeout_secs = 180
+max_context_chars = 12000
+num_predict = 160
+temperature = 0
+
+[build]
+repository = "x64"
+arch = "x86_64"
+max_retries = 10
+max_dep_depth = 3
