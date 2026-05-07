@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{Result, bail};
 use regex::Regex;
+use tracing::warn;
 
 pub fn find_spec(workdir: &Path) -> Result<PathBuf> {
     let mut found = Vec::new();
@@ -370,9 +371,22 @@ pub fn ensure_versioned_python_provides(spec: &str) -> String {
         .iter()
         .enumerate()
         .filter_map(|(idx, line)| {
-            (line.starts_with("Provides:       python3-%{srcname}")
-                || line.starts_with("%python_provide python3-%{srcname}"))
-            .then_some(idx)
+            if let Some(rest) = line.strip_prefix("Provides:") {
+                let trimmed = rest.trim_start();
+                if trimmed.starts_with("python3-") {
+                    let space_count = rest.len() - trimmed.len();
+                    if space_count != 7 {
+                        warn!(
+                            "Provides line at index {idx} has {space_count} spaces after colon (expected 7)"
+                        );
+                    }
+                    return Some(idx);
+                }
+            }
+            if line.starts_with("%python_provide python3-") {
+                return Some(idx);
+            }
+            None
         })
         .collect();
 
@@ -763,6 +777,65 @@ mod tests {
         assert!(out.contains(
             "BuildArch:      noarch\nProvides:       python3-%{srcname} = %{version}-%{release}\n%python_provide python3-%{srcname}\nBuildSystem:    pyproject"
         ));
+    }
+
+    #[test]
+    fn ensure_versioned_python_provides_replaces_literal_package_name() {
+        let spec = "Name: python-socks\nProvides:       python3-socks\nBuildRequires:  python3dist(setuptools)\n";
+        let out = ensure_versioned_python_provides(spec);
+        assert!(out.contains("Provides:       python3-%{srcname} = %{version}-%{release}"));
+        assert!(out.contains("%python_provide python3-%{srcname}"));
+        assert!(!out.contains("Provides:       python3-socks\n"));
+    }
+
+    #[test]
+    fn ensure_versioned_python_provides_replaces_literal_pair() {
+        let spec = "Name: python-socks\nProvides:       python3-socks\n%python_provide python3-socks\nBuildRequires:  python3dist(setuptools)\n";
+        let out = ensure_versioned_python_provides(spec);
+        assert!(out.contains("Provides:       python3-%{srcname} = %{version}-%{release}"));
+        assert_eq!(out.matches("%python_provide python3-%{srcname}").count(), 1);
+        assert!(!out.contains("python3-socks"));
+    }
+
+    #[test]
+    fn ensure_versioned_python_provides_skips_already_versioned_literal() {
+        let spec = "Name: python-socks\nProvides:       python3-socks = %{version}-%{release}\nBuildRequires:  python3dist(setuptools)\n";
+        let out = ensure_versioned_python_provides(spec);
+        assert!(out.contains("Provides:       python3-%{srcname} = %{version}-%{release}"));
+        assert!(!out.contains("python3-socks"));
+    }
+
+    #[test]
+    fn ensure_versioned_python_provides_preserves_literal_position() {
+        // Simulates the real python-socks spec: provides at the bottom, after BuildRequires
+        let spec = "\
+Name:           python-socks
+Version:        2.8.0
+BuildArch:      noarch
+BuildSystem:    pyproject
+BuildRequires:  pyproject-rpm-macros
+BuildRequires:  python3dist(setuptools)
+
+Provides:       python3-socks
+%python_provide python3-socks
+";
+        let out = ensure_versioned_python_provides(spec);
+        // Provides should be replaced with macro form
+        assert!(out.contains("Provides:       python3-%{srcname} = %{version}-%{release}"));
+        assert_eq!(out.matches("%python_provide python3-%{srcname}").count(), 1);
+        assert!(!out.contains("python3-socks"));
+        // Position must be preserved: after BuildRequires, not before BuildSystem
+        let provides_pos = out.find("Provides:").unwrap();
+        let buildreq_pos = out.find("BuildRequires:  pyproject").unwrap();
+        let buildsys_pos = out.find("BuildSystem:").unwrap();
+        assert!(
+            provides_pos > buildreq_pos,
+            "Provides should be after BuildRequires, not before it"
+        );
+        assert!(
+            provides_pos > buildsys_pos,
+            "Provides should be after BuildSystem, not before it"
+        );
     }
 
     #[test]
