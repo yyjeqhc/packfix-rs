@@ -685,14 +685,19 @@ pub(crate) fn classify_remote_build_status(status_text: &str) -> RemoteBuildStat
         .unwrap_or("unknown")
         .trim()
         .to_string();
-    if status_text.contains("succeeded") {
-        return RemoteBuildState::Succeeded;
-    }
+    // Failure/broken states take priority over succeeded.  A status output that
+    // mentions both (e.g. multi-package query, or historical log lines) must not
+    // be classified as Succeeded.
     if status_text.contains("failed")
         || status_text.contains("broken")
         || status_text.contains("unresolvable")
+        || status_text.contains("disabled")
+        || status_text.contains("excluded")
     {
         return RemoteBuildState::Failed { headline };
+    }
+    if status_text.contains("succeeded") {
+        return RemoteBuildState::Succeeded;
     }
     RemoteBuildState::Pending { headline }
 }
@@ -947,21 +952,138 @@ mod tests {
     }
 
     #[test]
-    fn classify_remote_build_status_recognizes_failure_and_success() {
+    fn classify_status_succeeded() {
+        assert_eq!(
+            classify_remote_build_status("succeeded"),
+            RemoteBuildState::Succeeded
+        );
+    }
+
+    #[test]
+    fn classify_status_succeeded_with_extra_text() {
         assert_eq!(
             classify_remote_build_status("succeeded\nmore text"),
             RemoteBuildState::Succeeded
         );
+    }
+
+    #[test]
+    fn classify_status_failed() {
         assert_eq!(
-            classify_remote_build_status("failed\nmore text"),
+            classify_remote_build_status("failed"),
             RemoteBuildState::Failed {
                 headline: "failed".into()
             }
         );
+    }
+
+    #[test]
+    fn classify_status_broken() {
+        assert_eq!(
+            classify_remote_build_status("broken: dependency issue"),
+            RemoteBuildState::Failed {
+                headline: "broken: dependency issue".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_unresolvable() {
+        assert_eq!(
+            classify_remote_build_status("unresolvable: nothing provides foo"),
+            RemoteBuildState::Failed {
+                headline: "unresolvable: nothing provides foo".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_failed_takes_priority_over_succeeded() {
+        // Multi-line output where one line says succeeded and another says failed
+        assert_eq!(
+            classify_remote_build_status("succeeded\nfailed"),
+            RemoteBuildState::Failed {
+                headline: "succeeded".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_broken_takes_priority_over_succeeded() {
+        assert_eq!(
+            classify_remote_build_status("foo succeeded\nbar broken"),
+            RemoteBuildState::Failed {
+                headline: "foo succeeded".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_building_is_pending() {
         assert_eq!(
             classify_remote_build_status("building"),
             RemoteBuildState::Pending {
                 headline: "building".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_scheduled_is_pending() {
+        assert_eq!(
+            classify_remote_build_status("scheduled"),
+            RemoteBuildState::Pending {
+                headline: "scheduled".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_running_is_pending() {
+        assert_eq!(
+            classify_remote_build_status("running"),
+            RemoteBuildState::Pending {
+                headline: "running".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_disabled_is_failed() {
+        assert_eq!(
+            classify_remote_build_status("disabled"),
+            RemoteBuildState::Failed {
+                headline: "disabled".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_excluded_is_failed() {
+        assert_eq!(
+            classify_remote_build_status("excluded"),
+            RemoteBuildState::Failed {
+                headline: "excluded".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_empty_is_pending() {
+        assert_eq!(
+            classify_remote_build_status(""),
+            RemoteBuildState::Pending {
+                headline: "unknown".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_status_unknown_output_is_pending() {
+        assert_eq!(
+            classify_remote_build_status("some random text"),
+            RemoteBuildState::Pending {
+                headline: "some random text".into()
             }
         );
     }
