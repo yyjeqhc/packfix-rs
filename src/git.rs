@@ -4,33 +4,34 @@ use anyhow::{Context, Result};
 
 use crate::utils::command::{CommandSpec, run_command};
 
-pub fn checkout(repo_dir: &Path, branch: &str) -> Result<()> {
-    run_git(repo_dir, &["checkout", branch], "checkout")
+pub async fn checkout(repo_dir: &Path, branch: &str) -> Result<()> {
+    run_git(repo_dir, &["checkout", branch], "checkout").await
 }
 
-pub fn create_branch(repo_dir: &Path, branch: &str) -> Result<()> {
-    run_git(repo_dir, &["checkout", "-b", branch], "create_branch")
+pub async fn create_branch(repo_dir: &Path, branch: &str) -> Result<()> {
+    run_git(repo_dir, &["checkout", "-b", branch], "create_branch").await
 }
 
-pub fn add(repo_dir: &Path, paths: &[&str]) -> Result<()> {
+pub async fn add(repo_dir: &Path, paths: &[&str]) -> Result<()> {
     let mut args = vec!["add"];
     args.extend_from_slice(paths);
-    run_git(repo_dir, &args, "add")
+    run_git(repo_dir, &args, "add").await
 }
 
-pub fn commit(repo_dir: &Path, message: &str) -> Result<()> {
+pub async fn commit(repo_dir: &Path, message: &str) -> Result<()> {
     run_git(
         repo_dir,
         &["commit", "--no-verify", "-m", message],
         "commit",
     )
+    .await
 }
 
-pub fn push(repo_dir: &Path, remote: &str, branch: &str) -> Result<()> {
-    run_git(repo_dir, &["push", remote, branch], "push")
+pub async fn push(repo_dir: &Path, remote: &str, branch: &str) -> Result<()> {
+    run_git(repo_dir, &["push", remote, branch], "push").await
 }
 
-pub fn branch_exists(repo_dir: &Path, branch: &str) -> Result<bool> {
+pub async fn branch_exists(repo_dir: &Path, branch: &str) -> Result<bool> {
     let result = run_git_capture(
         repo_dir,
         &[
@@ -40,24 +41,26 @@ pub fn branch_exists(repo_dir: &Path, branch: &str) -> Result<bool> {
             &format!("refs/heads/{branch}"),
         ],
         "branch_exists",
-    )?;
+    )
+    .await?;
     Ok(result.returncode == 0)
 }
 
-pub fn checkout_or_create_branch(repo_dir: &Path, branch: &str) -> Result<()> {
-    if branch_exists(repo_dir, branch)? {
-        checkout(repo_dir, branch)
+pub async fn checkout_or_create_branch(repo_dir: &Path, branch: &str) -> Result<()> {
+    if branch_exists(repo_dir, branch).await? {
+        checkout(repo_dir, branch).await
     } else {
-        create_branch(repo_dir, branch)
+        create_branch(repo_dir, branch).await
     }
 }
 
-pub fn has_staged_changes(repo_dir: &Path) -> Result<bool> {
+pub async fn has_staged_changes(repo_dir: &Path) -> Result<bool> {
     let result = run_git_capture(
         repo_dir,
         &["diff", "--cached", "--quiet", "--exit-code"],
         "has_staged_changes",
-    )?;
+    )
+    .await?;
     match result.returncode {
         0 => Ok(false),
         1 => Ok(true),
@@ -69,16 +72,16 @@ pub fn has_staged_changes(repo_dir: &Path) -> Result<bool> {
     }
 }
 
-pub fn commit_if_staged(repo_dir: &Path, message: &str) -> Result<bool> {
-    if !has_staged_changes(repo_dir)? {
+pub async fn commit_if_staged(repo_dir: &Path, message: &str) -> Result<bool> {
+    if !has_staged_changes(repo_dir).await? {
         return Ok(false);
     }
-    commit(repo_dir, message)?;
+    commit(repo_dir, message).await?;
     Ok(true)
 }
 
-fn run_git(repo_dir: &Path, args: &[&str], operation: &str) -> Result<()> {
-    let result = run_git_capture(repo_dir, args, operation)?;
+async fn run_git(repo_dir: &Path, args: &[&str], operation: &str) -> Result<()> {
+    let result = run_git_capture(repo_dir, args, operation).await?;
     if result.returncode != 0 {
         anyhow::bail!(
             "git {} failed: {}",
@@ -93,7 +96,7 @@ fn run_git(repo_dir: &Path, args: &[&str], operation: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_git_capture(
+async fn run_git_capture(
     repo_dir: &Path,
     args: &[&str],
     operation: &str,
@@ -105,6 +108,7 @@ fn run_git_capture(
         timeout: Duration::from_secs(300),
         log_path: repo_dir.join("logs").join(format!("git_{operation}.log")),
     })
+    .await
     .with_context(|| format!("git {} failed in {}", args.join(" "), repo_dir.display()))
 }
 
@@ -145,14 +149,19 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn checkout_or_create_branch_existing_branch() {
+    #[tokio::test]
+    async fn checkout_or_create_branch_existing_branch() {
         let dir = init_repo();
-        checkout_or_create_branch(dir.path(), "feature").expect("create branch");
-        checkout(dir.path(), "master")
-            .or_else(|_| checkout(dir.path(), "main"))
-            .expect("checkout default branch");
-        checkout_or_create_branch(dir.path(), "feature").expect("reuse branch");
+        checkout_or_create_branch(dir.path(), "feature")
+            .await
+            .expect("create branch");
+        // Try master first, then main (depends on git version)
+        if checkout(dir.path(), "master").await.is_err() {
+            checkout(dir.path(), "main").await.expect("checkout main");
+        }
+        checkout_or_create_branch(dir.path(), "feature")
+            .await
+            .expect("reuse branch");
         let output = Command::new("git")
             .args(["branch", "--show-current"])
             .current_dir(dir.path())
@@ -162,19 +171,23 @@ mod tests {
         assert_eq!(current, "feature");
     }
 
-    #[test]
-    fn commit_if_staged_no_changes_returns_false() {
+    #[tokio::test]
+    async fn commit_if_staged_no_changes_returns_false() {
         let dir = init_repo();
-        let committed = commit_if_staged(dir.path(), "no-op").expect("commit_if_staged");
+        let committed = commit_if_staged(dir.path(), "no-op")
+            .await
+            .expect("commit_if_staged");
         assert!(!committed);
     }
 
-    #[test]
-    fn commit_if_staged_with_changes_returns_true() {
+    #[tokio::test]
+    async fn commit_if_staged_with_changes_returns_true() {
         let dir = init_repo();
         std::fs::write(dir.path().join("demo.txt"), "x\n").expect("write demo");
-        add(dir.path(), &["demo.txt"]).expect("git add");
-        let committed = commit_if_staged(dir.path(), "add demo").expect("commit_if_staged");
+        add(dir.path(), &["demo.txt"]).await.expect("git add");
+        let committed = commit_if_staged(dir.path(), "add demo")
+            .await
+            .expect("commit_if_staged");
         assert!(committed);
     }
 }

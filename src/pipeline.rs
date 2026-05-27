@@ -178,7 +178,7 @@ pub async fn update_existing_python_package(
     let branch = update_branch_name(&normalized_package);
     let repo_dir = config::resolve_repo_dir(cfg);
 
-    git::checkout_or_create_branch(&repo_dir, &branch)?;
+    git::checkout_or_create_branch(&repo_dir, &branch).await?;
 
     let spec_dir = existing_package_dir(&repo_dir, &normalized_package)?;
     let spec_path = spec::find_spec(&spec_dir)?;
@@ -189,7 +189,7 @@ pub async fn update_existing_python_package(
     let current_version = spec::tag_value(&original_spec, "Version")
         .context("existing spec is missing Version tag")?;
 
-    let reference = generate_update_reference_spec(&normalized_package, &pypi_name, cli)?;
+    let reference = generate_update_reference_spec(&normalized_package, &pypi_name, cli).await?;
     let reference_spec = spec::read_spec(&reference.spec_path)?;
     let latest_version = spec::tag_value(&reference_spec, "Version")
         .context("generated reference spec is missing Version tag")?;
@@ -213,9 +213,9 @@ pub async fn update_existing_python_package(
             .context("updated spec path must be inside repo dir")?
             .display()
             .to_string();
-        git::add(&repo_dir, &[&rel])?;
+        git::add(&repo_dir, &[&rel]).await?;
         let commit_message = update_commit_message(&normalized_package, version_updated);
-        let committed = git::commit_if_staged(&repo_dir, &commit_message)?;
+        let committed = git::commit_if_staged(&repo_dir, &commit_message).await?;
         if committed {
             info!(
                 package = %normalized_package,
@@ -336,13 +336,13 @@ fn global_macro_value(spec_text: &str, name: &str) -> Option<String> {
     })
 }
 
-fn generate_update_reference_spec(
+async fn generate_update_reference_spec(
     package_name: &str,
     pypi_name: &str,
     cli: &Cli,
 ) -> Result<upstream::TakopackResult> {
     let output_root = takopack_output_root(package_name)?;
-    upstream::generate_python_spec(pypi_name, None, &output_root, &cli.takopack_bin)
+    upstream::generate_python_spec_async(pypi_name, None, &output_root, &cli.takopack_bin).await
 }
 
 fn extract_remote_asset_line(spec_text: &str) -> Option<String> {
@@ -511,7 +511,7 @@ pub(crate) async fn checkout_remote_package(
         if delay > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         }
-        match osc::osc_api_status(project, package_name, repository, arch, osc_bin) {
+        match osc::osc_api_status_async(project, package_name, repository, arch, osc_bin).await {
             Ok(result) => {
                 let s = &result.stdout;
                 if is_source_checkout_ready(s) {
@@ -549,7 +549,8 @@ pub(crate) async fn checkout_remote_package(
     }
 
     info!(project = %project, package = %package_name, "starting osc checkout");
-    let checkout = osc::osc_checkout(project, Some(package_name), Some(checkout_root), osc_bin)?;
+    let checkout =
+        osc::osc_checkout_async(project, Some(package_name), Some(checkout_root), osc_bin).await?;
     if !checkout.success {
         anyhow::bail!(
             "osc checkout failed for {project}/{package_name} (rc={}): {}",
@@ -558,7 +559,7 @@ pub(crate) async fn checkout_remote_package(
         );
     }
     info!(workdir = %pkg_dir.display(), "starting osc update");
-    let update = osc::osc_update(&pkg_dir, osc_bin)?;
+    let update = osc::osc_update_async(&pkg_dir, osc_bin).await?;
     if !update.success {
         anyhow::bail!(
             "osc update failed for {} (rc={}): {}",
@@ -698,13 +699,14 @@ pub(crate) async fn wait_for_remote_build_success(
         if delay > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         }
-        let result = match osc::osc_api_status(project, package, repository, arch, osc_bin) {
-            Ok(result) => result,
-            Err(err) => {
-                warn!(error = %err, poll, "OBS build status poll failed");
-                continue;
-            }
-        };
+        let result =
+            match osc::osc_api_status_async(project, package, repository, arch, osc_bin).await {
+                Ok(result) => result,
+                Err(err) => {
+                    warn!(error = %err, poll, "OBS build status poll failed");
+                    continue;
+                }
+            };
 
         let status_text = result.stdout;
         match classify_remote_build_status(&status_text) {

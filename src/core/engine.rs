@@ -91,7 +91,7 @@ pub async fn build_node(
         // Switch to the target branch before generating or copying spec content
         // into the repo worktree, otherwise untracked generated files can block
         // checkout when the branch already contains that package path.
-        git::checkout_or_create_branch(&repo_dir, revision)?;
+        git::checkout_or_create_branch(&repo_dir, revision).await?;
 
         let spec_path = prepare_spec(
             &repo_dir,
@@ -99,19 +99,21 @@ pub async fn build_node(
             &features,
             &source,
             &cli.takopack_bin,
-        )?;
+        )
+        .await?;
 
         let rel = spec_path
             .strip_prefix(&repo_dir)
             .context("spec path must be inside repo dir")?
             .display()
             .to_string();
-        git::add(&repo_dir, &[&rel])?;
-        let committed = git::commit_if_staged(&repo_dir, &format!("add/update {package_name}"))?;
+        git::add(&repo_dir, &[&rel]).await?;
+        let committed =
+            git::commit_if_staged(&repo_dir, &format!("add/update {package_name}")).await?;
         if !committed {
             info!(package = %package_name, "no staged changes to commit");
         }
-        git::push(&repo_dir, "origin", revision)?;
+        git::push(&repo_dir, "origin", revision).await?;
         info!(package = %package_name, branch = %revision, "git push done");
     } // git_lock released
 
@@ -281,11 +283,12 @@ async fn finish_after_local_report(
                 .context("copied spec is not inside repo dir")?
                 .display()
                 .to_string();
-            git::add(repo_dir, &[&rel])?;
-            let has_changes = git::has_staged_changes(repo_dir)?;
+            git::add(repo_dir, &[&rel]).await?;
+            let has_changes = git::has_staged_changes(repo_dir).await?;
             if has_changes {
-                git::commit_if_staged(repo_dir, &format!("update {package_name} after local fix"))?;
-                git::push(repo_dir, "origin", revision)?;
+                git::commit_if_staged(repo_dir, &format!("update {package_name} after local fix"))
+                    .await?;
+                git::push(repo_dir, "origin", revision).await?;
             }
             has_changes
         }; // git_lock released
@@ -483,13 +486,14 @@ async fn run_remote_fix_loop(ctx: RemoteFixContext<'_>) -> Result<RemoteFixResul
                 )));
             }
             pipeline::RemoteBuildState::Failed { headline } => {
-                let remote_status = crate::obs::local::osc_api_status(
+                let remote_status = crate::obs::local::osc_api_status_async(
                     ctx.project,
                     ctx.package_name,
                     &ctx.cli.repository,
                     &ctx.cli.arch,
                     &ctx.cli.osc_bin,
-                )?;
+                )
+                .await?;
                 let status_text = remote_status.stdout;
                 let status_deps = analyze_remote_status_dependencies(&status_text);
                 if !status_deps.is_empty() {
@@ -615,13 +619,14 @@ async fn run_remote_fix_loop(ctx: RemoteFixContext<'_>) -> Result<RemoteFixResul
                             .context("remote-fixed spec must live inside repo dir")?
                             .display()
                             .to_string();
-                        git::add(ctx.repo_dir, &[&rel])?;
+                        git::add(ctx.repo_dir, &[&rel]).await?;
                         let committed = git::commit_if_staged(
                             ctx.repo_dir,
                             &format!("remote-fix {} after OBS failure", ctx.package_name),
-                        )?;
+                        )
+                        .await?;
                         if committed {
-                            git::push(ctx.repo_dir, "origin", ctx.revision)?;
+                            git::push(ctx.repo_dir, "origin", ctx.revision).await?;
                         }
                         committed
                     }
@@ -718,14 +723,17 @@ async fn wait_for_remote_build_outcome(
         if delay > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         }
-        let result =
-            match crate::obs::local::osc_api_status(project, package, repository, arch, osc_bin) {
-                Ok(result) => result,
-                Err(err) => {
-                    warn!(error = %err, poll, package, "OBS build status poll failed");
-                    continue;
-                }
-            };
+        let result = match crate::obs::local::osc_api_status_async(
+            project, package, repository, arch, osc_bin,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                warn!(error = %err, poll, package, "OBS build status poll failed");
+                continue;
+            }
+        };
 
         let status = pipeline::classify_remote_build_status(&result.stdout);
         match &status {
@@ -951,7 +959,7 @@ fn remote_issue_evidence_lines(issue: &crate::core::BuildIssue, log: &str) -> Ve
 }
 
 /// 准备 spec 文件：优先修改 git 仓库中的现有 spec，否则 takopack 生成。
-fn prepare_spec(
+async fn prepare_spec(
     repo_dir: &Path,
     package_name: &str,
     features: &[String],
@@ -975,12 +983,13 @@ fn prepare_spec(
         PrepareSpecMode::Generate { pypi_name, version } => {
             info!(package = %package_name, version, "generating fresh spec via takopack");
             let spec_root = pipeline::takopack_output_root(package_name)?;
-            let generated = upstream::generate_python_spec(
+            let generated = upstream::generate_python_spec_async(
                 &pypi_name,
                 version.as_deref(),
                 &spec_root,
                 takopack_bin,
-            )?;
+            )
+            .await?;
             let spec_path = generated.spec_path;
 
             if !features.is_empty() {

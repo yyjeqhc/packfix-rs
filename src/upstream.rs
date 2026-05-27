@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::utils::command::{CommandSpec, run_command};
+use crate::utils::command::{CommandSpec, run_command, run_command_blocking};
 
 #[derive(Debug, Clone)]
 pub struct TakopackResult {
@@ -26,7 +26,52 @@ pub fn python_dist_name(name: &str) -> String {
     name.strip_prefix("python-").unwrap_or(name).to_string()
 }
 
+#[allow(dead_code)]
 pub fn generate_python_spec(
+    package_name: &str,
+    version: Option<&str>,
+    output_dir: &Path,
+    takopack_bin: &Path,
+) -> Result<TakopackResult> {
+    let mut args = vec![
+        "py".to_string(),
+        "package".to_string(),
+        "-o".to_string(),
+        output_dir.display().to_string(),
+        package_name.to_string(),
+    ];
+    if let Some(version) = version {
+        args.push(version.to_string());
+    }
+
+    let log_path = output_dir.join("logs").join("takopack.log");
+    let result = run_command_blocking(CommandSpec {
+        program: takopack_bin.to_path_buf(),
+        args,
+        cwd: Some(output_dir.to_path_buf()),
+        timeout: Duration::from_secs(600),
+        log_path: log_path.clone(),
+    })?;
+    if result.returncode != 0 {
+        bail!("takopack failed: {}", result.stderr);
+    }
+
+    let spec_path = find_generated_spec(output_dir, package_name);
+    let Some(spec_path) = spec_path else {
+        bail!(
+            "takopack succeeded but no .spec was found under {}",
+            output_dir.display()
+        );
+    };
+
+    Ok(TakopackResult {
+        output_dir: output_dir.to_path_buf(),
+        spec_path,
+        log_path,
+    })
+}
+
+pub async fn generate_python_spec_async(
     package_name: &str,
     version: Option<&str>,
     output_dir: &Path,
@@ -50,7 +95,8 @@ pub fn generate_python_spec(
         cwd: Some(output_dir.to_path_buf()),
         timeout: Duration::from_secs(600),
         log_path: log_path.clone(),
-    })?;
+    })
+    .await?;
     if result.returncode != 0 {
         bail!("takopack failed: {}", result.stderr);
     }

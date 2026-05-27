@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::Result;
 
-use crate::utils::command::{CommandResult, CommandSpec, run_command};
+use crate::utils::command::{CommandResult, CommandSpec, run_command, run_command_blocking};
 
 #[derive(Debug, Clone)]
 pub struct BuildResult {
@@ -16,6 +16,7 @@ pub struct BuildResult {
     pub stderr: String,
 }
 
+#[allow(dead_code)]
 pub fn osc_build(
     workdir: &Path,
     spec_path: &Path,
@@ -30,7 +31,7 @@ pub fn osc_build(
     let log_path = workdir
         .join("logs")
         .join(format!("build_attempt_{attempt_index:03}.log"));
-    let result: CommandResult = run_command(CommandSpec {
+    let result: CommandResult = run_command_blocking(CommandSpec {
         program: osc_bin.to_path_buf(),
         args,
         cwd: Some(workdir.to_path_buf()),
@@ -87,7 +88,7 @@ pub fn osc_checkout(
     let args = checkout_args(project, package);
     let checkout_root = checkout_root.unwrap_or_else(|| Path::new("."));
     let log_path = checkout_log_path(checkout_root, project, package);
-    let result: CommandResult = run_command(CommandSpec {
+    let result: CommandResult = run_command_blocking(CommandSpec {
         program: osc_bin.to_path_buf(),
         args,
         cwd: Some(checkout_root.to_path_buf()),
@@ -121,7 +122,7 @@ fn checkout_log_path(checkout_root: &Path, project: &str, package: Option<&str>)
 pub fn osc_update(workdir: &Path, osc_bin: &Path) -> Result<BuildResult> {
     let args = vec!["up".to_string(), "-S".to_string()];
     let log_path = workdir.join("logs").join("osc_update.log");
-    let result: CommandResult = run_command(CommandSpec {
+    let result: CommandResult = run_command_blocking(CommandSpec {
         program: osc_bin.to_path_buf(),
         args,
         cwd: Some(workdir.to_path_buf()),
@@ -192,7 +193,7 @@ pub fn osc_api_status(
     let log_path = Path::new(".")
         .join("logs")
         .join(format!("osc_status_{package}{ts}.log"));
-    let result: CommandResult = run_command(CommandSpec {
+    let result: CommandResult = run_command_blocking(CommandSpec {
         program: osc_bin.to_path_buf(),
         args,
         cwd: Some(Path::new(".").to_path_buf()),
@@ -214,6 +215,122 @@ fn checkout_args(project: &str, package: Option<&str>) -> Vec<String> {
         None => project.to_string(),
     };
     vec!["checkout".to_string(), target]
+}
+
+// ---------------------------------------------------------------------------
+// Async versions (for use in async contexts)
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+pub async fn osc_build_async(
+    workdir: &Path,
+    spec_path: &Path,
+    repository: &str,
+    arch: &str,
+    project: Option<&str>,
+    osc_bin: &Path,
+    attempt_index: usize,
+    build_root: Option<&Path>,
+) -> Result<BuildResult> {
+    let args = build_args(repository, arch, spec_path, project, build_root);
+    let log_path = workdir
+        .join("logs")
+        .join(format!("build_attempt_{attempt_index:03}.log"));
+    let result: CommandResult = run_command(CommandSpec {
+        program: osc_bin.to_path_buf(),
+        args,
+        cwd: Some(workdir.to_path_buf()),
+        timeout: Duration::from_secs(3600),
+        log_path: log_path.clone(),
+    })
+    .await?;
+
+    Ok(BuildResult {
+        success: result.returncode == 0,
+        returncode: result.returncode,
+        log_path: result.log_path,
+        stdout: result.stdout,
+        stderr: result.stderr,
+    })
+}
+
+pub async fn osc_checkout_async(
+    project: &str,
+    package: Option<&str>,
+    checkout_root: Option<&Path>,
+    osc_bin: &Path,
+) -> Result<BuildResult> {
+    let args = checkout_args(project, package);
+    let checkout_root = checkout_root.unwrap_or_else(|| Path::new("."));
+    let log_path = checkout_log_path(checkout_root, project, package);
+    let result: CommandResult = run_command(CommandSpec {
+        program: osc_bin.to_path_buf(),
+        args,
+        cwd: Some(checkout_root.to_path_buf()),
+        timeout: Duration::from_secs(300),
+        log_path: log_path.clone(),
+    })
+    .await?;
+    Ok(BuildResult {
+        success: result.returncode == 0,
+        returncode: result.returncode,
+        log_path: result.log_path,
+        stdout: result.stdout,
+        stderr: result.stderr,
+    })
+}
+
+pub async fn osc_update_async(workdir: &Path, osc_bin: &Path) -> Result<BuildResult> {
+    let args = vec!["up".to_string(), "-S".to_string()];
+    let log_path = workdir.join("logs").join("osc_update.log");
+    let result: CommandResult = run_command(CommandSpec {
+        program: osc_bin.to_path_buf(),
+        args,
+        cwd: Some(workdir.to_path_buf()),
+        timeout: Duration::from_secs(300),
+        log_path: log_path.clone(),
+    })
+    .await?;
+    Ok(BuildResult {
+        success: result.returncode == 0,
+        returncode: result.returncode,
+        log_path: result.log_path,
+        stdout: result.stdout,
+        stderr: result.stderr,
+    })
+}
+
+pub async fn osc_api_status_async(
+    project: &str,
+    package: &str,
+    repository: &str,
+    arch: &str,
+    osc_bin: &Path,
+) -> Result<BuildResult> {
+    let url = format!("/build/{project}/{repository}/{arch}/{package}/_status");
+    let args = vec!["api".to_string(), url];
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| format!("_{:016}", d.as_nanos()))
+        .unwrap_or_default();
+    let log_path = Path::new(".")
+        .join("logs")
+        .join(format!("osc_status_{package}{ts}.log"));
+    let result: CommandResult = run_command(CommandSpec {
+        program: osc_bin.to_path_buf(),
+        args,
+        cwd: Some(Path::new(".").to_path_buf()),
+        timeout: Duration::from_secs(60),
+        log_path: log_path.clone(),
+    })
+    .await?;
+    Ok(BuildResult {
+        success: result.returncode == 0,
+        returncode: result.returncode,
+        log_path: result.log_path,
+        stdout: result.stdout,
+        stderr: result.stderr,
+    })
 }
 
 #[cfg(test)]

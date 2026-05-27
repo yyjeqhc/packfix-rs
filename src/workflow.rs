@@ -103,7 +103,7 @@ impl WorkflowConfig {
 }
 
 pub async fn run_workflow(config: WorkflowConfig) -> Result<Report> {
-    let (workdir, spec_path, package_name, mut report) = prepare(&config)?;
+    let (workdir, spec_path, package_name, mut report) = prepare(&config).await?;
     report.spec_path = Some(spec_path.clone());
     report.package_name = package_name;
     report.operation_log_path = Some(ops_log::operation_log_path(&workdir));
@@ -189,7 +189,7 @@ pub async fn run_workflow(config: WorkflowConfig) -> Result<Report> {
             max_attempts = config.max_retries + 1,
             "attempt started"
         );
-        let build = osc::osc_build(
+        let build = osc::osc_build_async(
             &workdir,
             &spec_path,
             &config.repository,
@@ -198,7 +198,8 @@ pub async fn run_workflow(config: WorkflowConfig) -> Result<Report> {
             &config.osc_bin,
             attempt,
             build_root.as_deref(),
-        )?;
+        )
+        .await?;
         report.last_log_path = Some(build.log_path.clone());
         ops_log::log_operation(
             &workdir,
@@ -719,17 +720,18 @@ pub async fn summarize_workdir(
     Ok(report)
 }
 
-fn prepare(config: &WorkflowConfig) -> Result<(PathBuf, PathBuf, Option<String>, Report)> {
+async fn prepare(config: &WorkflowConfig) -> Result<(PathBuf, PathBuf, Option<String>, Report)> {
     match &config.mode {
         WorkflowMode::New { pypi_name, version } => {
             let workdir = std::env::current_dir()?.join("workspaces").join(pypi_name);
             std::fs::create_dir_all(&workdir)?;
-            let generated = upstream::generate_python_spec(
+            let generated = upstream::generate_python_spec_async(
                 pypi_name,
                 version.as_deref(),
                 &workdir,
                 &config.takopack_bin,
-            )?;
+            )
+            .await?;
             let package_name = upstream::python_package_name(pypi_name);
             let mut report = Report::new(Status::Failed);
             report.notes.push(format!(
