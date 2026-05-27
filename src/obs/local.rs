@@ -17,6 +17,7 @@ pub struct BuildResult {
 }
 
 #[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn osc_build(
     workdir: &Path,
     spec_path: &Path,

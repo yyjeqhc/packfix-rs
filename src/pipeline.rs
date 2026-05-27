@@ -135,7 +135,7 @@ pub async fn build_existing_python_packages(
         .iter()
         .map(|p| build_existing_scheduler_request(p))
         .collect();
-    let root_inputs: Vec<String> = packages.iter().map(|p| p.clone()).collect();
+    let root_inputs: Vec<String> = packages.to_vec();
 
     let scheduler = crate::core::scheduler::BuildScheduler::new(cli.clone(), cfg.cloned());
     let results = scheduler.run(roots, project, rev).await?;
@@ -1064,7 +1064,7 @@ mod tests {
 
     #[test]
     fn build_existing_scheduler_requests_normalize_multiple_packages() {
-        let reqs: Vec<BuildRequest> = vec!["cffsubr", "arrow"]
+        let reqs: Vec<BuildRequest> = ["cffsubr", "arrow"]
             .iter()
             .map(|p| build_existing_scheduler_request(p))
             .collect();
@@ -1095,7 +1095,7 @@ mod tests {
         std::fs::write(dir2.path().join("example.spec"), "Name: python-example\n")
             .expect("write spec");
 
-        let reqs: Vec<BuildRequest> = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()]
+        let reqs: Vec<BuildRequest> = [dir1.path().to_path_buf(), dir2.path().to_path_buf()]
             .iter()
             .map(|d| build_fix_scheduler_request(d))
             .collect::<Result<Vec<_>>>()

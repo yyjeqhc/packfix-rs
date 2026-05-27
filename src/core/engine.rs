@@ -250,6 +250,7 @@ pub async fn build_node(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish_after_local_report(
     report: crate::report::Report,
     resources: Arc<BuildResources>,
@@ -299,9 +300,9 @@ async fn finish_after_local_report(
                 project,
                 revision,
                 std::slice::from_ref(&component),
-                &obs_api_url,
-                &repo_url,
-                &creds,
+                obs_api_url,
+                repo_url,
+                creds,
             )
             .await?;
             if !ebf_result.success {
@@ -314,7 +315,7 @@ async fn finish_after_local_report(
 
         pipeline::wait_for_remote_build_success(
             project,
-            &package_name,
+            package_name,
             &cli.repository,
             &cli.arch,
             &cli.osc_bin,
@@ -756,6 +757,7 @@ async fn wait_for_remote_build_outcome(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_remote_build_log_to_file(
     package_name: &str,
     attempt: usize,
@@ -1200,9 +1202,7 @@ mod tests {
 
     #[test]
     fn branch_checkout_happens_before_prepare_spec_writes_repo_files() {
-        let mut steps = Vec::new();
-        steps.push("checkout_or_create_branch");
-        steps.push("prepare_spec");
+        let steps = vec!["checkout_or_create_branch", "prepare_spec"];
         assert_eq!(steps, vec!["checkout_or_create_branch", "prepare_spec"]);
     }
 

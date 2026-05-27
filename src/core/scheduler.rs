@@ -173,15 +173,15 @@ impl BuildScheduler {
                 {
                     let graph = self.graph.lock().await;
                     for (pkg, node) in graph.iter() {
-                        if matches!(node.state, NodeState::WaitingForDeps) {
-                            if let Some(failed_dep) = node.deps.iter().find(|dep| {
+                        if matches!(node.state, NodeState::WaitingForDeps)
+                            && let Some(failed_dep) = node.deps.iter().find(|dep| {
                                 graph
                                     .get(dep)
                                     .map(|n| matches!(n.state, NodeState::Failed(_)))
                                     .unwrap_or(false)
-                            }) {
-                                to_fail.push((pkg.clone(), failed_dep.clone()));
-                            }
+                            })
+                        {
+                            to_fail.push((pkg.clone(), failed_dep.clone()));
                         }
                     }
                 }
@@ -273,7 +273,7 @@ impl BuildScheduler {
                             package: dep_package,
                             features: dep_features,
                             source: dep_source,
-                        } = dependency_build_request(&dep);
+                        } = dependency_build_request(dep);
 
                         // 循环检测
                         let would_cycle = graph.has_cycle(&pkg, &dep_package);
@@ -560,15 +560,15 @@ mod tests {
 
         let mut to_fail: Vec<(String, String)> = Vec::new();
         for (pkg, node) in graph.iter() {
-            if matches!(node.state, NodeState::WaitingForDeps) {
-                if let Some(failed_dep) = node.deps.iter().find(|dep| {
+            if matches!(node.state, NodeState::WaitingForDeps)
+                && let Some(failed_dep) = node.deps.iter().find(|dep| {
                     graph
                         .get(dep)
                         .map(|n| matches!(n.state, NodeState::Failed(_)))
                         .unwrap_or(false)
-                }) {
-                    to_fail.push((pkg.clone(), failed_dep.clone()));
-                }
+                })
+            {
+                to_fail.push((pkg.clone(), failed_dep.clone()));
             }
         }
 

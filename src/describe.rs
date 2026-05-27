@@ -281,6 +281,7 @@ async fn generate_description_chat(
 ///
 /// Does NOT include DNS pre-check or timeout wrapping — callers are
 /// responsible for those (if desired).
+#[allow(clippy::too_many_arguments)]
 pub async fn generate_description_core(
     dir: &Path,
     host: &str,
@@ -339,6 +340,7 @@ pub async fn generate_description_core(
 
 /// Collect text from `dir`, build system + user prompts, call Ollama chat,
 /// format the result, and return the description string.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_describe(
     dir: &Path,
     host: &str,

@@ -67,7 +67,7 @@ pub fn extract_source_if_present(source_dir: &Path, state_root: &Path) {
         ops_log::log_operation(
             state_root,
             "source-extract",
-            &[format!("STATUS: failed"), format!("ERROR: {e}")],
+            &["STATUS: failed".to_string(), format!("ERROR: {e}")],
         );
     }
 }
@@ -104,14 +104,14 @@ fn try_extract(source_dir: &Path, state_root: &Path) -> Result<()> {
         "extracting source archive"
     );
 
-    if extract_dir.exists() {
-        if let Err(e) = fs::remove_dir_all(&extract_dir) {
-            warn!(
-                extract_dir = %extract_dir.display(),
-                error = %e,
-                "failed to remove existing extract dir"
-            );
-        }
+    if extract_dir.exists()
+        && let Err(e) = fs::remove_dir_all(&extract_dir)
+    {
+        warn!(
+            extract_dir = %extract_dir.display(),
+            error = %e,
+            "failed to remove existing extract dir"
+        );
     }
     fs::create_dir_all(&extract_dir)
         .with_context(|| format!("failed to create extract dir {}", extract_dir.display()))?;

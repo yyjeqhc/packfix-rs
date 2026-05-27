@@ -691,10 +691,10 @@ fn find_state_json(workdir: &Path) -> Option<crate::extract::PackfixState> {
     }
     // Try two levels up (workspaces/<pkg>/ from checkout dir at
     // workspaces/<pkg>/<project>/<pkg_name>/)
-    if let Some(grandparent) = workdir.parent().and_then(|p| p.parent()) {
-        if let Ok(Some(s)) = crate::extract::read_state(grandparent) {
-            return Some(s);
-        }
+    if let Some(grandparent) = workdir.parent().and_then(|p| p.parent())
+        && let Ok(Some(s)) = crate::extract::read_state(grandparent)
+    {
+        return Some(s);
     }
     None
 }
@@ -828,7 +828,7 @@ async fn summarize_for_silent(
     // Wrap the LLM call in a short timeout so a dead server does not block
     // the build pipeline for the ollama_rs default (30 s).
     let llm_timeout = Duration::from_secs(2);
-    match tokio::time::timeout(
+    tokio::time::timeout(
         llm_timeout,
         crate::utils::llm::summarize_spec_text_silent(
             host,
@@ -839,10 +839,7 @@ async fn summarize_for_silent(
         ),
     )
     .await
-    {
-        Ok(suggestion) => suggestion,
-        Err(_elapsed) => crate::utils::llm::TextSuggestion::default(),
-    }
+    .unwrap_or_default()
 }
 
 fn apply_text_suggestion(spec_path: &Path, suggestion: &TextSuggestion) -> Result<()> {
