@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
 fn default_description_system_prompt() -> String {
@@ -82,17 +82,21 @@ pub struct DescriptionConfig {
     pub temperature: f32,
 }
 
-pub fn load_config() -> Option<PackfixConfig> {
-    let paths = config_paths();
-    for path in paths {
-        if path.exists()
-            && let Ok(content) = std::fs::read_to_string(&path)
-            && let Ok(config) = toml::from_str::<PackfixConfig>(&content)
-        {
-            return Some(config);
+pub fn load_config() -> Result<Option<PackfixConfig>> {
+    for path in config_paths() {
+        if !path.exists() {
+            continue;
         }
+        return load_from_file(&path).map(Some);
     }
-    None
+    Ok(None)
+}
+
+fn load_from_file(path: &Path) -> Result<PackfixConfig> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read config file {}", path.display()))?;
+    toml::from_str(&content)
+        .with_context(|| format!("failed to parse config file {}", path.display()))
 }
 
 pub fn config_paths() -> Vec<PathBuf> {
@@ -491,5 +495,64 @@ timeout_secs = 60
     #[test]
     fn description_temperature_default() {
         assert!((resolve_description_temperature(None) - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn load_config_returns_none_when_no_files_exist() {
+        // load_config checks cwd for packfix.toml and ~/.config/packfix/config.toml.
+        // In a temp dir neither exists, so it should return Ok(None).
+        let dir = tempfile::tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = load_config();
+        std::env::set_current_dir(original).unwrap();
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn load_from_file_parses_valid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("packfix.toml");
+        std::fs::write(&path, "[obs]\napi_url = \"https://test.example.com\"\n").unwrap();
+        let config = load_from_file(&path).unwrap();
+        assert_eq!(
+            config.obs.unwrap().api_url.unwrap(),
+            "https://test.example.com"
+        );
+    }
+
+    #[test]
+    fn load_from_file_errors_on_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("packfix.toml");
+        std::fs::write(&path, "this is not valid toml [[[[").unwrap();
+        let err = load_from_file(&path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("failed to parse config file"), "got: {msg}");
+        assert!(
+            msg.contains("packfix.toml"),
+            "error must include path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_from_file_errors_on_read_failure() {
+        let path = std::path::Path::new("/nonexistent/path/packfix.toml");
+        let err = load_from_file(path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("failed to read config file"), "got: {msg}");
+    }
+
+    #[test]
+    fn load_config_errors_on_invalid_toml_in_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("packfix.toml"), "bad [[[").unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = load_config();
+        std::env::set_current_dir(original).unwrap();
+        let err = result.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("failed to parse"), "got: {msg}");
     }
 }

@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let mut cli = Cli::parse();
-    let cfg = config::load_config();
+    let cfg = config::load_config()?;
     apply_cli_config_defaults(&mut cli, cfg.as_ref());
 
     match cli.command.clone() {
