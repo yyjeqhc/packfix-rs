@@ -12,6 +12,7 @@ use crate::{
         graph::{DependencyTarget, PackageSource, parse_dependency_targets},
         resources::{BuildResources, LocalBuildPool},
     },
+    fix,
     fix::{
         analyzer::analyze_log,
         fixer::{apply_action, decide_action},
@@ -546,18 +547,10 @@ async fn run_remote_fix_loop(ctx: RemoteFixContext<'_>) -> Result<RemoteFixResul
                     )
                 })?;
                 let issue = analyze_log(&log);
-                let action = decide_action(&issue);
-                info!(
-                    package = %ctx.package_name,
-                    attempt,
-                    remote_log = %remote_log_path.display(),
-                    issue = ?issue,
-                    action = ?action,
-                    "remote build failure classified"
-                );
-
+                let issue = fix::contextualize_issue(ctx.package_workspace, issue)?;
                 let deps = parse_dependency_targets(&issue);
                 if !deps.is_empty() {
+                    let action = decide_action(&issue);
                     ops_log::log_operation(
                         ctx.package_workspace,
                         "remote-build-needs-dependencies",
@@ -572,6 +565,16 @@ async fn run_remote_fix_loop(ctx: RemoteFixContext<'_>) -> Result<RemoteFixResul
                     );
                     return Ok(RemoteFixResult::NeedsDependencies(deps));
                 }
+
+                let action = decide_action(&issue);
+                info!(
+                    package = %ctx.package_name,
+                    attempt,
+                    remote_log = %remote_log_path.display(),
+                    issue = ?issue,
+                    action = ?action,
+                    "remote build failure classified"
+                );
 
                 if action.is_need_human() {
                     ops_log::log_operation(

@@ -59,6 +59,10 @@ pub struct Cli {
     /// Auto-generate and replace %description via LLM before building
     #[arg(long, global = true, default_value_t = true)]
     pub llm_description: bool,
+
+    /// Disable LLM-based %description generation (overrides --llm-description)
+    #[arg(long, global = true)]
+    pub no_llm_description: bool,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -149,4 +153,39 @@ pub enum Command {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn llm_description_defaults_to_true() {
+        let cli = Cli::try_parse_from(["packfix", "config-show"]).unwrap();
+        assert!(cli.llm_description);
+        assert!(!cli.no_llm_description);
+    }
+
+    #[test]
+    fn no_llm_description_flag_disables() {
+        let cli = Cli::try_parse_from(["packfix", "--no-llm-description", "config-show"]).unwrap();
+        // llm_description stays at its default (true); the application code
+        // checks no_llm_description to override it.
+        assert!(cli.llm_description);
+        assert!(cli.no_llm_description);
+    }
+
+    #[test]
+    fn both_flags_can_coexist() {
+        let cli = Cli::try_parse_from([
+            "packfix",
+            "--llm-description",
+            "--no-llm-description",
+            "config-show",
+        ])
+        .unwrap();
+        assert!(cli.llm_description);
+        assert!(cli.no_llm_description);
+    }
 }

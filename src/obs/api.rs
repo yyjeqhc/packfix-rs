@@ -3,6 +3,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use tracing::warn;
 
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 #[derive(Debug, Clone)]
 pub struct ObsCredentials {
     pub user: String,
@@ -111,6 +119,17 @@ async fn package_exists(
     matches!(obs_get(client, api_url, &path, creds).await, Ok((200, _)))
 }
 
+fn package_meta_xml(project: &str, package: &str) -> String {
+    let ep = xml_escape(package);
+    let ej = xml_escape(project);
+    format!(
+        r#"<package name="{ep}" project="{ej}">
+  <title>{ep}</title>
+  <description>Auto-generated package for {ep}</description>
+</package>"#
+    )
+}
+
 async fn create_meta(
     client: &reqwest::Client,
     api_url: &str,
@@ -118,12 +137,7 @@ async fn create_meta(
     package: &str,
     creds: &ObsCredentials,
 ) -> Result<()> {
-    let meta = format!(
-        r#"<package name="{package}" project="{project}">
-  <title>{package}</title>
-  <description>Auto-generated package for {package}</description>
-</package>"#
-    );
+    let meta = package_meta_xml(project, package);
     let path = format!("/source/{project}/{package}/_meta");
     let code = obs_put_xml(client, api_url, &path, &meta, creds).await?;
     if code != 200 {
@@ -141,17 +155,19 @@ async fn upload_service(
     repo_url: &str,
     creds: &ObsCredentials,
 ) -> Result<()> {
-    let extract = format!("SPECS/{package}/*");
+    let extract = format!("SPECS/{}/*", xml_escape(package));
     let service = format!(
         r#"<services>
   <service name="obs_scm">
     <param name="scm">git</param>
-    <param name="url">{repo_url}</param>
-    <param name="revision">{revision}</param>
+    <param name="url">{}</param>
+    <param name="revision">{}</param>
     <param name="extract">{extract}</param>
   </service>
   <service name="download_files"/>
-</services>"#
+</services>"#,
+        xml_escape(repo_url),
+        xml_escape(revision),
     );
     let path = format!("/source/{project}/{package}/_service");
     let code = obs_put_xml(client, api_url, &path, &service, creds).await?;
@@ -169,7 +185,8 @@ async fn commit_package(
     action: &str,
     creds: &ObsCredentials,
 ) -> Result<()> {
-    let comment = format!("{action} {package} package");
+    let comment_raw = format!("{action} {package} package");
+    let comment: String = form_urlencoded::byte_serialize(comment_raw.as_bytes()).collect();
     let path = format!("/source/{project}/{package}?cmd=commit&comment={comment}");
     let code = obs_post(client, api_url, &path, creds).await?;
     if code != 200 {
@@ -333,5 +350,68 @@ mod tests {
     fn read_osc_credentials_missing_file() {
         let result = read_osc_credentials(Path::new("/nonexistent/oscrc"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn xml_escape_handles_special_characters() {
+        assert_eq!(xml_escape("foo & bar"), "foo &amp; bar");
+        assert_eq!(xml_escape("a<b>c"), "a&lt;b&gt;c");
+        assert_eq!(xml_escape("say \"hello\""), "say &quot;hello&quot;");
+        assert_eq!(xml_escape("it's"), "it&apos;s");
+        assert_eq!(xml_escape("plain"), "plain");
+    }
+
+    #[test]
+    fn package_meta_xml_escapes_special_chars() {
+        let meta = package_meta_xml("home:user\"proj", "pkg&<test>");
+        assert!(meta.contains("pkg&amp;&lt;test&gt;"));
+        assert!(meta.contains("home:user&quot;proj"));
+        assert!(!meta.contains("pkg&<test>"));
+        assert!(meta.starts_with("<package name="));
+    }
+
+    #[test]
+    fn package_meta_xml_plain_names() {
+        let meta = package_meta_xml("home:obs", "python-foo");
+        assert!(meta.contains(r#"name="python-foo""#));
+        assert!(meta.contains(r#"project="home:obs""#));
+        assert!(meta.contains("<title>python-foo</title>"));
+    }
+
+    #[test]
+    fn commit_comment_is_url_encoded() {
+        // Spaces -> +
+        let encoded: String =
+            form_urlencoded::byte_serialize(b"create python-foo package").collect();
+        assert_eq!(encoded, "create+python-foo+package");
+    }
+
+    #[test]
+    fn commit_comment_url_encodes_special_chars() {
+        let raw = "update pkg&foo <bar> #1? a+b 100% done";
+        let encoded: String = form_urlencoded::byte_serialize(raw.as_bytes()).collect();
+        assert!(encoded.contains("%26"), "ampersand must be percent-encoded");
+        assert!(encoded.contains("%3C"), "less-than must be percent-encoded");
+        assert!(
+            encoded.contains("%3E"),
+            "greater-than must be percent-encoded"
+        );
+        assert!(encoded.contains("%23"), "hash must be percent-encoded");
+        assert!(
+            encoded.contains("%3F"),
+            "question mark must be percent-encoded"
+        );
+        // form_urlencoded encodes + as %2B (literal plus) and space as +
+        assert!(
+            encoded.contains("%2B"),
+            "literal plus must be percent-encoded"
+        );
+        assert!(
+            encoded.contains("%25"),
+            "percent sign must be percent-encoded"
+        );
+        assert!(encoded.contains('+'), "spaces must be encoded as +");
+        // Must not contain raw special chars
+        assert!(!encoded.contains('&'));
     }
 }

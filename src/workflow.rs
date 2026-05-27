@@ -9,6 +9,7 @@ use crate::{
     cli::Cli,
     core::BuildIssue,
     core::resources::LocalBuildPool,
+    fix,
     fix::analyzer::analyze_log,
     fix::fixer::{apply_action, decide_action},
     obs::local as osc,
@@ -71,7 +72,11 @@ impl WorkflowConfig {
             model: cli.model.clone(),
             apply_text: cli.apply_text,
             local_build_pool: None,
-            llm_description: cli.llm_description,
+            llm_description: if cli.no_llm_description {
+                false
+            } else {
+                cli.llm_description
+            },
             llm_semaphore: None,
             description_system_prompt: crate::config::resolve_description_system_prompt(None),
             description_user_prompt: crate::config::resolve_description_user_prompt(None),
@@ -251,7 +256,17 @@ pub async fn run_workflow(config: WorkflowConfig) -> Result<Report> {
         ));
 
         let log = std::fs::read_to_string(&build.log_path)?;
-        let issue = contextualize_issue(&workdir, analyze_log(&log), &mut report)?;
+        let issue = fix::contextualize_issue(&workdir, analyze_log(&log))?;
+        if let BuildIssue::InstallModuleMismatch {
+            ref wrong_module,
+            ref suggested_module,
+        } = issue
+            && wrong_module != suggested_module
+        {
+            report.notes.push(format!(
+                "install module mismatch refined from '{wrong_module}' to '{suggested_module}' using source archive layout"
+            ));
+        }
         let action = decide_action(&issue);
         let evidence_lines = issue_evidence_lines(&issue, &log);
         info!(
@@ -753,36 +768,6 @@ fn prepare(config: &WorkflowConfig) -> Result<(PathBuf, PathBuf, Option<String>,
     }
 }
 
-fn contextualize_issue(
-    workdir: &Path,
-    issue: BuildIssue,
-    report: &mut Report,
-) -> Result<BuildIssue> {
-    match issue {
-        BuildIssue::InstallModuleMismatch {
-            wrong_module,
-            suggested_module,
-        } => {
-            if let Some(inferred) = crate::upstream::infer_install_module(workdir, &wrong_module)?
-                && inferred != suggested_module
-            {
-                report.notes.push(format!(
-                    "install module mismatch refined from '{suggested_module}' to '{inferred}' using source archive layout"
-                ));
-                return Ok(BuildIssue::InstallModuleMismatch {
-                    wrong_module,
-                    suggested_module: inferred,
-                });
-            }
-            Ok(BuildIssue::InstallModuleMismatch {
-                wrong_module,
-                suggested_module,
-            })
-        }
-        other => Ok(other),
-    }
-}
-
 async fn add_text_suggestion(
     config: &WorkflowConfig,
     workdir: &Path,
@@ -945,6 +930,7 @@ mod tests {
             oscrc_path: None,
             default_obs_project: None,
             llm_description: false,
+            no_llm_description: false,
         };
         let report = run_workflow(WorkflowConfig::from_cli(
             &cli,
@@ -1003,6 +989,7 @@ mod tests {
             oscrc_path: None,
             default_obs_project: None,
             llm_description: false,
+            no_llm_description: false,
         };
 
         let cfg = WorkflowConfig::from_cli(
@@ -1035,6 +1022,7 @@ mod tests {
             oscrc_path: None,
             default_obs_project: None,
             llm_description: false,
+            no_llm_description: false,
         };
         let cfg = WorkflowConfig::from_cli(
             &cli,
@@ -1069,6 +1057,7 @@ mod tests {
             oscrc_path: None,
             default_obs_project: None,
             llm_description: true,
+            no_llm_description: false,
         };
         let cfg = WorkflowConfig::from_cli(
             &cli,

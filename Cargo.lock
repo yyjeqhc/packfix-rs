@@ -965,6 +965,7 @@ dependencies = [
  "bzip2",
  "clap",
  "flate2",
+ "form_urlencoded",
  "ollama-rs",
  "pretty_assertions",
  "regex",

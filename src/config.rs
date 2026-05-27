@@ -63,6 +63,7 @@ pub struct BuildConfig {
     pub arch: Option<String>,
     pub max_retries: Option<usize>,
     pub max_dep_depth: Option<usize>,
+    pub llm_description: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

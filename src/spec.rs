@@ -33,7 +33,9 @@ pub fn tag_value(spec: &str, tag: &str) -> Option<String> {
 
 pub fn declared_package_name(spec: &str) -> Option<String> {
     for line in spec.lines() {
-        let (key, value) = line.split_once(':')?;
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
         if key.trim() != "Name" {
             continue;
         }
@@ -907,6 +909,18 @@ Provides:       python3-socks
             Some("python-demo".into())
         );
         assert_eq!(declared_package_name("Name: python-%{srcname}\n"), None);
+    }
+
+    #[test]
+    fn declared_package_name_skips_comment_and_blank_lines_before_name() {
+        let spec = "# This is a comment\n\n%global srcname foo\n\nName: python-foo\nVersion: 1.0\n";
+        assert_eq!(declared_package_name(spec), Some("python-foo".into()));
+    }
+
+    #[test]
+    fn declared_package_name_skips_lines_without_colons() {
+        let spec = "# comment line\n%global pypi_name bar\n\nName: python-bar\n";
+        assert_eq!(declared_package_name(spec), Some("python-bar".into()));
     }
 
     #[test]

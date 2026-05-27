@@ -85,6 +85,16 @@ fn apply_cli_config_defaults(cli: &mut Cli, cfg: Option<&config::PackfixConfig>)
     {
         cli.model = v;
     }
+    // --no-llm-description takes precedence over config; only apply config
+    // when neither --llm-description nor --no-llm-description was given.
+    if !arg_provided(&args, "--llm-description")
+        && !arg_provided(&args, "--no-llm-description")
+        && let Some(v) = cfg
+            .and_then(|c| c.build.as_ref())
+            .and_then(|b| b.llm_description)
+    {
+        cli.llm_description = v;
+    }
 }
 
 #[tokio::main]
