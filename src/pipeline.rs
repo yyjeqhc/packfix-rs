@@ -612,11 +612,21 @@ pub(crate) fn stage_generated_package_dir(
         .parent()
         .context("generated spec must have parent directory")?;
     let target_dir = repo_dir.join("SPECS").join(package_name);
-    if target_dir.exists() {
-        std::fs::remove_dir_all(&target_dir)?;
+    if target_dir.exists() && !is_dir_empty(&target_dir) {
+        anyhow::bail!(
+            "refusing to overwrite existing non-empty package directory {}; \
+             remove it manually if you want to regenerate",
+            target_dir.display()
+        );
     }
     copy_dir_all(generated_dir, &target_dir)?;
     Ok(target_dir)
+}
+
+fn is_dir_empty(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false)
 }
 
 pub(crate) fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
@@ -1144,6 +1154,82 @@ mod tests {
         assert!(
             err.to_string().contains("root node result not found"),
             "expected 'root node result not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn stage_generated_creates_target_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let generated = repo.join("gen").join("mypkg");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("python-mypkg.spec"), "Name: python-mypkg\n").unwrap();
+
+        let staged =
+            stage_generated_package_dir(repo, "python-mypkg", &generated.join("python-mypkg.spec"))
+                .unwrap();
+        assert!(staged.join("python-mypkg.spec").exists());
+    }
+
+    #[test]
+    fn stage_generated_succeeds_when_target_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let target = repo.join("SPECS").join("python-mypkg");
+        std::fs::create_dir_all(&target).unwrap(); // empty dir
+        let generated = repo.join("gen");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("python-mypkg.spec"), "Name: python-mypkg\n").unwrap();
+
+        let staged =
+            stage_generated_package_dir(repo, "python-mypkg", &generated.join("python-mypkg.spec"))
+                .unwrap();
+        assert!(staged.join("python-mypkg.spec").exists());
+    }
+
+    #[test]
+    fn stage_generated_errors_when_target_is_nonempty() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let target = repo.join("SPECS").join("python-mypkg");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("existing-file.txt"), "important data\n").unwrap();
+
+        let generated = repo.join("gen");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("python-mypkg.spec"), "Name: python-mypkg\n").unwrap();
+
+        let err =
+            stage_generated_package_dir(repo, "python-mypkg", &generated.join("python-mypkg.spec"))
+                .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(msg.contains("refusing to overwrite"), "got: {msg}");
+        assert!(
+            msg.contains("python-mypkg"),
+            "error must include path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn stage_generated_error_preserves_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let target = repo.join("SPECS").join("python-mypkg");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("precious.txt"), "do not delete\n").unwrap();
+
+        let generated = repo.join("gen");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("python-mypkg.spec"), "Name: python-mypkg\n").unwrap();
+
+        let _ =
+            stage_generated_package_dir(repo, "python-mypkg", &generated.join("python-mypkg.spec"));
+
+        // The existing file must still be there
+        assert_eq!(
+            std::fs::read_to_string(target.join("precious.txt")).unwrap(),
+            "do not delete\n"
         );
     }
 }

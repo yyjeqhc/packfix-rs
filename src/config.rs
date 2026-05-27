@@ -83,11 +83,15 @@ pub struct DescriptionConfig {
 }
 
 pub fn load_config() -> Result<Option<PackfixConfig>> {
-    for path in config_paths() {
+    load_config_from(&config_paths())
+}
+
+fn load_config_from(paths: &[PathBuf]) -> Result<Option<PackfixConfig>> {
+    for path in paths {
         if !path.exists() {
             continue;
         }
-        return load_from_file(&path).map(Some);
+        return load_from_file(path).map(Some);
     }
     Ok(None)
 }
@@ -499,14 +503,10 @@ timeout_secs = 60
 
     #[test]
     fn load_config_returns_none_when_no_files_exist() {
-        // load_config checks cwd for packfix.toml and ~/.config/packfix/config.toml.
-        // In a temp dir neither exists, so it should return Ok(None).
         let dir = tempfile::tempdir().unwrap();
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-        let result = load_config();
-        std::env::set_current_dir(original).unwrap();
-        assert!(result.unwrap().is_none());
+        let paths = vec![dir.path().join("nonexistent.toml")];
+        let result = load_config_from(&paths).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
@@ -544,14 +544,12 @@ timeout_secs = 60
     }
 
     #[test]
-    fn load_config_errors_on_invalid_toml_in_cwd() {
+    fn load_config_errors_on_invalid_toml() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("packfix.toml"), "bad [[[").unwrap();
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-        let result = load_config();
-        std::env::set_current_dir(original).unwrap();
-        let err = result.unwrap_err();
+        let path = dir.path().join("packfix.toml");
+        std::fs::write(&path, "bad [[[").unwrap();
+        let paths = vec![path];
+        let err = load_config_from(&paths).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("failed to parse"), "got: {msg}");
     }
