@@ -327,6 +327,7 @@ fn important_lines(log: &str) -> Vec<String> {
                 || lower.contains("nothing provides")
                 || lower.contains("unresolvable")
                 || lower.contains("not an obs scm working copy")
+                || lower.contains("is not a working copy")
         })
         .take(20)
         .map(|line| line.trim().to_string())
@@ -744,6 +745,27 @@ ModuleNotFoundError: No module named 'pybreaker'
             matches!(issue, BuildIssue::PatchApplyError { .. }),
             "expected PatchApplyError, got {issue:?}"
         );
+        assert!(matches!(
+            decide_action(&issue),
+            BuildAction::NeedHuman { .. }
+        ));
+    }
+
+    #[test]
+    fn osc_not_a_working_copy_is_unknown_with_evidence() {
+        let log = "STDERR:\nDirectory '/tmp/work' is not a working copy\n";
+        let issue = analyze_log(log);
+        match &issue {
+            BuildIssue::Unknown { important_lines } => {
+                assert!(
+                    important_lines
+                        .iter()
+                        .any(|l| l.contains("is not a working copy")),
+                    "expected 'is not a working copy' in important_lines, got: {important_lines:?}"
+                );
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
         assert!(matches!(
             decide_action(&issue),
             BuildAction::NeedHuman { .. }
