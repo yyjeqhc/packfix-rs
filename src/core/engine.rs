@@ -31,8 +31,8 @@ pub enum BuildOutcome {
     Success {
         report: Option<Box<crate::report::Report>>,
     },
-    NeedsDependencies(Vec<DependencyTarget>),
-    Failed(String),
+    NeedsDependencies(Vec<DependencyTarget>, Option<Box<crate::report::Report>>),
+    Failed(String, Option<Box<crate::report::Report>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,10 +135,13 @@ pub async fn build_node(
     .await?;
 
     if !ebf_result.success {
-        return Ok(BuildOutcome::Failed(format!(
-            "ebf submit failed: {}/{} succeeded; stderr: {}",
-            ebf_result.success_count, ebf_result.total_count, ebf_result.stderr
-        )));
+        return Ok(BuildOutcome::Failed(
+            format!(
+                "ebf submit failed: {}/{} succeeded; stderr: {}",
+                ebf_result.success_count, ebf_result.total_count, ebf_result.stderr
+            ),
+            None,
+        ));
     }
     info!(
         success = ebf_result.success_count,
@@ -193,7 +196,7 @@ pub async fn build_node(
                 match remote_result? {
                     RemoteFixResult::Success => return Ok(BuildOutcome::Success { report: None }),
                     RemoteFixResult::NeedsDependencies(deps) => {
-                        return Ok(BuildOutcome::NeedsDependencies(deps));
+                        return Ok(BuildOutcome::NeedsDependencies(deps, None));
                     }
                     RemoteFixResult::FallbackToLocal(reason) => {
                         info!(package = %package_name, reason, "falling back to local build after remote phase");
@@ -240,7 +243,7 @@ pub async fn build_node(
                     let deps = parse_dependency_targets(issue);
                     if !deps.is_empty() {
                         info!(package = %package_name, dep_count = deps.len(), "local build found dependencies before remote observation concluded");
-                        return Ok(BuildOutcome::NeedsDependencies(deps));
+                        return Ok(BuildOutcome::NeedsDependencies(deps, None));
                     }
                 }
 
@@ -306,10 +309,13 @@ async fn finish_after_local_report(
             )
             .await?;
             if !ebf_result.success {
-                return Ok(BuildOutcome::Failed(format!(
-                    "ebf re-submit failed: {}/{} succeeded; stderr: {}",
-                    ebf_result.success_count, ebf_result.total_count, ebf_result.stderr
-                )));
+                return Ok(BuildOutcome::Failed(
+                    format!(
+                        "ebf re-submit failed: {}/{} succeeded; stderr: {}",
+                        ebf_result.success_count, ebf_result.total_count, ebf_result.stderr
+                    ),
+                    None,
+                ));
             }
         }
 
@@ -331,15 +337,21 @@ async fn finish_after_local_report(
     if let Some(issue) = &report.final_issue {
         let deps = parse_dependency_targets(issue);
         if !deps.is_empty() {
-            return Ok(BuildOutcome::NeedsDependencies(deps));
+            return Ok(BuildOutcome::NeedsDependencies(
+                deps,
+                Some(Box::new(report.clone())),
+            ));
         }
     }
 
     // 非依赖问题：workflow 已尝试自动修复，若仍失败则返回 Failed
-    Ok(BuildOutcome::Failed(format!(
-        "build failed after {} attempts, final status: {:?}",
-        report.build_attempts, report.status
-    )))
+    Ok(BuildOutcome::Failed(
+        format!(
+            "build failed after {} attempts, final status: {:?}",
+            report.build_attempts, report.status
+        ),
+        Some(Box::new(report.clone())),
+    ))
 }
 
 async fn run_prefetched_local_attempt(
@@ -424,14 +436,17 @@ fn local_workdir_outcome_from_report(
     if let Some(issue) = &report.final_issue {
         let deps = parse_dependency_targets(issue);
         if !deps.is_empty() {
-            return BuildOutcome::NeedsDependencies(deps);
+            return BuildOutcome::NeedsDependencies(deps, Some(Box::new(report.clone())));
         }
     }
 
-    BuildOutcome::Failed(format!(
-        "local workdir build for {package_name} failed after {} attempts, final status: {:?}",
-        report.build_attempts, report.status
-    ))
+    BuildOutcome::Failed(
+        format!(
+            "local workdir build for {package_name} failed after {} attempts, final status: {:?}",
+            report.build_attempts, report.status
+        ),
+        Some(Box::new(report.clone())),
+    )
 }
 
 fn resolve_execution_mode(source: &PackageSource) -> Result<NodeExecutionMode> {
@@ -1153,12 +1168,48 @@ mod tests {
         let outcome = local_workdir_outcome_from_report("python-demo", &report);
         assert!(matches!(
             outcome,
-            BuildOutcome::NeedsDependencies(ref deps)
+            BuildOutcome::NeedsDependencies(ref deps, _)
             if deps == &vec![DependencyTarget {
                 package: "fonttools".into(),
                 features: vec!["lxml".into()],
             }]
         ));
+    }
+
+    #[test]
+    fn needs_deps_outcome_preserves_report() {
+        let mut report = crate::report::Report::new(Status::Failed);
+        report.build_attempts = 3;
+        report.fixes_applied = 1;
+        report.final_issue = Some(crate::core::BuildIssue::DependencyUnresolvable {
+            deps: vec!["python3dist(fonttools[lxml])".into()],
+        });
+
+        let outcome = local_workdir_outcome_from_report("python-demo", &report);
+        match outcome {
+            BuildOutcome::NeedsDependencies(_, Some(inner)) => {
+                assert_eq!(inner.build_attempts, 3);
+                assert_eq!(inner.fixes_applied, 1);
+            }
+            other => panic!("expected NeedsDependencies with report, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn failed_outcome_preserves_report() {
+        let mut report = crate::report::Report::new(Status::Failed);
+        report.build_attempts = 5;
+        report.fixes_applied = 2;
+
+        let outcome = local_workdir_outcome_from_report("python-demo", &report);
+        match outcome {
+            BuildOutcome::Failed(reason, Some(inner)) => {
+                assert!(reason.contains("5 attempts"));
+                assert_eq!(inner.build_attempts, 5);
+                assert_eq!(inner.fixes_applied, 2);
+            }
+            other => panic!("expected Failed with report, got: {other:?}"),
+        }
     }
 
     #[test]

@@ -787,10 +787,22 @@ fn node_results_to_report_with_root_set(
     );
 
     match &root_result.outcome {
-        crate::core::engine::BuildOutcome::Failed(reason) => {
+        crate::core::engine::BuildOutcome::Failed(reason, inner) => {
+            if let Some(inner) = inner {
+                report.build_attempts = inner.build_attempts;
+                report.fixes_applied = inner.fixes_applied;
+                report.last_log_path = inner.last_log_path.clone();
+                report.notes.extend(inner.notes.clone());
+            }
             report.notes.push(format!("root build failed: {reason}"));
         }
-        crate::core::engine::BuildOutcome::NeedsDependencies(deps) => {
+        crate::core::engine::BuildOutcome::NeedsDependencies(deps, inner) => {
+            if let Some(inner) = inner {
+                report.build_attempts = inner.build_attempts;
+                report.fixes_applied = inner.fixes_applied;
+                report.last_log_path = inner.last_log_path.clone();
+                report.notes.extend(inner.notes.clone());
+            }
             report.notes.push(format!(
                 "root build needs dependencies: {}",
                 deps.iter()
@@ -819,13 +831,13 @@ fn node_results_to_report_with_root_set(
         if r.package != root_package && !root_packages.contains(&r.package) {
             let status = match &r.outcome {
                 crate::core::engine::BuildOutcome::Success { .. } => "success",
-                crate::core::engine::BuildOutcome::Failed(reason) => {
+                crate::core::engine::BuildOutcome::Failed(reason, _) => {
                     report
                         .notes
                         .push(format!("  dependency {}: failed ({})", r.package, reason));
                     continue;
                 }
-                crate::core::engine::BuildOutcome::NeedsDependencies(_) => "needs-deps",
+                crate::core::engine::BuildOutcome::NeedsDependencies(_, _) => "needs-deps",
             };
             report
                 .notes
@@ -1249,7 +1261,7 @@ mod tests {
                 },
                 crate::core::scheduler::NodeResult {
                     package: "python-lxml".into(),
-                    outcome: crate::core::engine::BuildOutcome::Failed("oops".into()),
+                    outcome: crate::core::engine::BuildOutcome::Failed("oops".into(), None),
                 },
             ],
         )

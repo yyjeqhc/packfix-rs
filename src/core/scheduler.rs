@@ -151,7 +151,7 @@ impl BuildScheduler {
                     .await
                     {
                         Ok(outcome) => outcome,
-                        Err(err) => BuildOutcome::Failed(err.to_string()),
+                        Err(err) => BuildOutcome::Failed(err.to_string(), None),
                     };
                     Ok((pkg, outcome))
                 });
@@ -196,7 +196,7 @@ impl BuildScheduler {
                     graph.mark_failed(pkg, reason.clone());
                     results.push(NodeResult {
                         package: pkg.clone(),
-                        outcome: BuildOutcome::Failed(reason),
+                        outcome: BuildOutcome::Failed(reason, None),
                     });
                 }
 
@@ -228,6 +228,7 @@ impl BuildScheduler {
                             package: pkg.clone(),
                             outcome: BuildOutcome::Failed(
                                 "scheduler deadlock: waiting for deps with no progress".into(),
+                                None,
                             ),
                         });
                     }
@@ -263,7 +264,7 @@ impl BuildScheduler {
                     record_terminal_outcome(&mut graph, &mut results, pkg, outcome);
                     resume_waiting_nodes_with_satisfied_deps(&mut graph);
                 }
-                BuildOutcome::NeedsDependencies(deps) => {
+                BuildOutcome::NeedsDependencies(deps, _) => {
                     info!(package = %pkg, dep_count = deps.len(), "build needs dependencies");
                     let mut graph = self.graph.lock().await;
                     graph.mark_state(&pkg, NodeState::WaitingForDeps);
@@ -289,10 +290,10 @@ impl BuildScheduler {
                             );
                             results.push(NodeResult {
                                 package: pkg.clone(),
-                                outcome: BuildOutcome::Failed(format!(
-                                    "dependency cycle with {}",
-                                    dep_package
-                                )),
+                                outcome: BuildOutcome::Failed(
+                                    format!("dependency cycle with {}", dep_package),
+                                    None,
+                                ),
                             });
                             break;
                         }
@@ -318,7 +319,7 @@ impl BuildScheduler {
                         }
                     }
                 }
-                BuildOutcome::Failed(reason) => {
+                BuildOutcome::Failed(reason, _) => {
                     info!(
                         completed = completed + 1,
                         total = total_roots,
@@ -339,7 +340,7 @@ impl BuildScheduler {
             .count();
         let failed = results
             .iter()
-            .filter(|r| matches!(r.outcome, BuildOutcome::Failed(_)))
+            .filter(|r| matches!(r.outcome, BuildOutcome::Failed(_, _)))
             .count();
         info!(total = results.len(), succeeded, failed, "batch finished");
 
@@ -386,11 +387,11 @@ fn record_terminal_outcome(
             info!(package = %pkg, "build succeeded");
             graph.mark_success(&pkg);
         }
-        BuildOutcome::Failed(reason) => {
+        BuildOutcome::Failed(reason, _) => {
             warn!(package = %pkg, reason = %reason, "build failed");
             graph.mark_failed(&pkg, reason.clone());
         }
-        BuildOutcome::NeedsDependencies(_) => return,
+        BuildOutcome::NeedsDependencies(_, _) => return,
     }
 
     results.push(NodeResult {
@@ -426,7 +427,7 @@ mod tests {
             &mut graph,
             &mut results,
             "python-foo".into(),
-            BuildOutcome::Failed("engine exploded".into()),
+            BuildOutcome::Failed("engine exploded".into(), None),
         );
 
         assert!(matches!(
@@ -437,7 +438,7 @@ mod tests {
         assert_eq!(results[0].package, "python-foo");
         assert!(matches!(
             &results[0].outcome,
-            BuildOutcome::Failed(reason) if reason == "engine exploded"
+            BuildOutcome::Failed(reason, _) if reason == "engine exploded"
         ));
     }
 
