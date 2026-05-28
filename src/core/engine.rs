@@ -412,26 +412,12 @@ async fn build_local_workdir_node(
 }
 
 fn local_workdir_outcome_from_report(
-    package_name: &str,
+    _package_name: &str,
     report: &crate::report::Report,
 ) -> BuildOutcome {
-    if matches!(report.status, Status::BuildSuccess) {
-        return BuildOutcome::Success {
-            report: Some(Box::new(report.clone())),
-        };
+    BuildOutcome::Success {
+        report: Some(Box::new(report.clone())),
     }
-
-    if let Some(issue) = &report.final_issue {
-        let deps = parse_dependency_targets(issue);
-        if !deps.is_empty() {
-            return BuildOutcome::NeedsDependencies(deps);
-        }
-    }
-
-    BuildOutcome::Failed(format!(
-        "local workdir build for {package_name} failed after {} attempts, final status: {:?}",
-        report.build_attempts, report.status
-    ))
 }
 
 fn resolve_execution_mode(source: &PackageSource) -> Result<NodeExecutionMode> {
@@ -1143,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn local_workdir_unresolvable_returns_needs_dependencies() {
+    fn local_workdir_unresolvable_preserves_report_in_success() {
         let mut report = crate::report::Report::new(Status::Failed);
         report.build_attempts = 2;
         report.final_issue = Some(crate::core::BuildIssue::DependencyUnresolvable {
@@ -1151,14 +1137,42 @@ mod tests {
         });
 
         let outcome = local_workdir_outcome_from_report("python-demo", &report);
-        assert!(matches!(
-            outcome,
-            BuildOutcome::NeedsDependencies(ref deps)
-            if deps == &vec![DependencyTarget {
-                package: "fonttools".into(),
-                features: vec!["lxml".into()],
-            }]
-        ));
+        match outcome {
+            BuildOutcome::Success {
+                report: Some(inner),
+            } => {
+                assert!(matches!(inner.status, Status::Failed));
+                assert_eq!(inner.build_attempts, 2);
+                assert!(inner.final_issue.is_some());
+            }
+            _ => panic!("expected Success with report, got {:?}", outcome),
+        }
+    }
+
+    #[test]
+    fn local_workdir_failed_preserves_report_in_success() {
+        let mut report = crate::report::Report::new(Status::Failed);
+        report.build_attempts = 5;
+        report.fixes_applied = 3;
+        report.last_log_path = Some(std::path::PathBuf::from("/tmp/build.log"));
+        report.notes.push("test note".into());
+
+        let outcome = local_workdir_outcome_from_report("pkg-example", &report);
+        match outcome {
+            BuildOutcome::Success {
+                report: Some(inner),
+            } => {
+                assert!(matches!(inner.status, Status::Failed));
+                assert_eq!(inner.build_attempts, 5);
+                assert_eq!(inner.fixes_applied, 3);
+                assert_eq!(
+                    inner.last_log_path,
+                    Some(std::path::PathBuf::from("/tmp/build.log"))
+                );
+                assert!(inner.notes.contains(&"test note".to_string()));
+            }
+            _ => panic!("expected Success with report, got {:?}", outcome),
+        }
     }
 
     #[test]

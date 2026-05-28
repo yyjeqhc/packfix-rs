@@ -27,6 +27,9 @@ pub struct BuildScheduler {
 pub struct NodeResult {
     pub package: String,
     pub outcome: BuildOutcome,
+    /// The workflow report, if available.  Carries build_attempts / fixes_applied
+    /// counters that are lost when the outcome is NeedsDependencies or Failed.
+    pub report: Option<Box<crate::report::Report>>,
 }
 
 #[derive(Debug, Clone)]
@@ -197,6 +200,7 @@ impl BuildScheduler {
                     results.push(NodeResult {
                         package: pkg.clone(),
                         outcome: BuildOutcome::Failed(reason),
+                        report: None,
                     });
                 }
 
@@ -229,6 +233,7 @@ impl BuildScheduler {
                             outcome: BuildOutcome::Failed(
                                 "scheduler deadlock: waiting for deps with no progress".into(),
                             ),
+                            report: None,
                         });
                     }
                 }
@@ -293,6 +298,7 @@ impl BuildScheduler {
                                     "dependency cycle with {}",
                                     dep_package
                                 )),
+                                report: None,
                             });
                             break;
                         }
@@ -381,21 +387,24 @@ fn record_terminal_outcome(
     pkg: String,
     outcome: BuildOutcome,
 ) {
-    match &outcome {
-        BuildOutcome::Success { report: _ } => {
+    let report = match &outcome {
+        BuildOutcome::Success { report } => {
             info!(package = %pkg, "build succeeded");
             graph.mark_success(&pkg);
+            report.clone()
         }
         BuildOutcome::Failed(reason) => {
             warn!(package = %pkg, reason = %reason, "build failed");
             graph.mark_failed(&pkg, reason.clone());
+            None
         }
         BuildOutcome::NeedsDependencies(_) => return,
-    }
+    };
 
     results.push(NodeResult {
         package: pkg,
         outcome,
+        report,
     });
 }
 

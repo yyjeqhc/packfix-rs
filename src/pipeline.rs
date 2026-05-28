@@ -774,7 +774,10 @@ fn node_results_to_report_with_root_set(
         .context("root node result not found in scheduler output")?;
 
     let mut report = report::Report::new(match &root_result.outcome {
-        crate::core::engine::BuildOutcome::Success { .. } => report::Status::BuildSuccess,
+        crate::core::engine::BuildOutcome::Success { .. } => match &root_result.report {
+            Some(inner) => inner.status.clone(),
+            None => report::Status::BuildSuccess,
+        },
         _ => report::Status::Failed,
     });
     report.package_name = Some(root_package.clone());
@@ -786,39 +789,46 @@ fn node_results_to_report_with_root_set(
             .join("packfix_operations.log"),
     );
 
-    match &root_result.outcome {
-        crate::core::engine::BuildOutcome::Failed(reason) => {
-            report.notes.push(format!("root build failed: {reason}"));
-        }
-        crate::core::engine::BuildOutcome::NeedsDependencies(deps) => {
+    if let Some(inner) = &root_result.report {
+        report.build_attempts = inner.build_attempts;
+        report.fixes_applied = inner.fixes_applied;
+        report.last_log_path = inner.last_log_path.clone();
+        report.notes.extend(inner.notes.clone());
+        if matches!(inner.status, report::Status::BuildSuccess) {
             report.notes.push(format!(
-                "root build needs dependencies: {}",
-                deps.iter()
-                    .map(|d| d.package.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "local build succeeded after {} attempts, {} fixes applied",
+                inner.build_attempts, inner.fixes_applied
             ));
         }
-        crate::core::engine::BuildOutcome::Success { report: inner } => {
-            if let Some(inner) = inner {
-                report.build_attempts = inner.build_attempts;
-                report.fixes_applied = inner.fixes_applied;
-                report.last_log_path = inner.last_log_path.clone();
-                report.notes.extend(inner.notes.clone());
-                report.notes.push(format!(
-                    "local build succeeded after {} attempts, {} fixes applied",
-                    inner.build_attempts, inner.fixes_applied
-                ));
-            } else {
-                report.notes.push("root build succeeded".into());
-            }
-        }
+    } else if let crate::core::engine::BuildOutcome::Failed(reason) = &root_result.outcome {
+        report.notes.push(format!("root build failed: {reason}"));
+    } else if let crate::core::engine::BuildOutcome::NeedsDependencies(deps) = &root_result.outcome
+    {
+        report.notes.push(format!(
+            "root build needs dependencies: {}",
+            deps.iter()
+                .map(|d| d.package.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    } else {
+        report.notes.push("root build succeeded".into());
     }
 
     for r in &results {
         if r.package != root_package && !root_packages.contains(&r.package) {
             let status = match &r.outcome {
-                crate::core::engine::BuildOutcome::Success { .. } => "success",
+                crate::core::engine::BuildOutcome::Success { .. } => {
+                    if let Some(inner) = &r.report {
+                        if matches!(inner.status, report::Status::BuildSuccess) {
+                            "success"
+                        } else {
+                            "failed"
+                        }
+                    } else {
+                        "success"
+                    }
+                }
                 crate::core::engine::BuildOutcome::Failed(reason) => {
                     report
                         .notes
@@ -1094,10 +1104,12 @@ mod tests {
                 crate::core::scheduler::NodeResult {
                     package: "python-fonttools".into(),
                     outcome: crate::core::engine::BuildOutcome::Success { report: None },
+                    report: None,
                 },
                 crate::core::scheduler::NodeResult {
                     package: "python-lxml".into(),
                     outcome: crate::core::engine::BuildOutcome::Success { report: None },
+                    report: None,
                 },
             ],
         )
@@ -1115,14 +1127,17 @@ mod tests {
                 crate::core::scheduler::NodeResult {
                     package: "python-fonttools".into(),
                     outcome: crate::core::engine::BuildOutcome::Success { report: None },
+                    report: None,
                 },
                 crate::core::scheduler::NodeResult {
                     package: "python-ufolib2".into(),
                     outcome: crate::core::engine::BuildOutcome::Success { report: None },
+                    report: None,
                 },
                 crate::core::scheduler::NodeResult {
                     package: "python-lxml".into(),
                     outcome: crate::core::engine::BuildOutcome::Success { report: None },
+                    report: None,
                 },
             ],
         )
@@ -1246,10 +1261,12 @@ mod tests {
                 crate::core::scheduler::NodeResult {
                     package: "python-fonttools".into(),
                     outcome: crate::core::engine::BuildOutcome::Success { report: None },
+                    report: None,
                 },
                 crate::core::scheduler::NodeResult {
                     package: "python-lxml".into(),
                     outcome: crate::core::engine::BuildOutcome::Failed("oops".into()),
+                    report: None,
                 },
             ],
         )
@@ -1267,6 +1284,7 @@ mod tests {
             vec![crate::core::scheduler::NodeResult {
                 package: "python-fonttools".into(),
                 outcome: crate::core::engine::BuildOutcome::Success { report: None },
+                report: None,
             }],
         )
         .expect_err("missing root should error");
