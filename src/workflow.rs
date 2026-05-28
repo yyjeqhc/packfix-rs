@@ -754,10 +754,8 @@ async fn prepare(config: &WorkflowConfig) -> Result<(PathBuf, PathBuf, Option<St
                 .or_else(|| {
                     // Fall back to spec filename (e.g. "python-fontmake.spec" →
                     // "python-fontmake") when Name: contains a macro like %{srcname}.
-                    spec_path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .map(String::from)
+                    // Strips `_service:obs_scm:` prefix from service-generated filenames.
+                    spec::spec_file_basename(&spec_path)
                 })
                 .map(|name| upstream::python_package_name(&name));
             Ok((

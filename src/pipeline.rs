@@ -278,11 +278,9 @@ fn infer_local_workdir_package_name(workdir: &Path) -> Result<String> {
         return Ok(upstream::python_package_name(&name));
     }
 
-    let stem = spec_path
-        .file_stem()
-        .and_then(|name| name.to_str())
+    let stem = spec::spec_file_basename(&spec_path)
         .context("failed to infer package name from local spec filename")?;
-    Ok(upstream::python_package_name(stem))
+    Ok(upstream::python_package_name(&stem))
 }
 
 fn normalize_existing_repo_package(package: &str) -> String {
@@ -1352,6 +1350,22 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(target.join("precious.txt")).unwrap(),
             "do not delete\n"
+        );
+    }
+
+    #[test]
+    fn infer_local_workdir_package_name_strips_service_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        // Simulate osc up -S output: spec with macro Name and service-prefixed filename
+        std::fs::write(
+            dir.path().join("_service:obs_scm:python-cffsubr.spec"),
+            "%global srcname cffsubr\nName: python-%{srcname}\nVersion: 0.4.0\n",
+        )
+        .unwrap();
+        let name = infer_local_workdir_package_name(dir.path()).unwrap();
+        assert_eq!(
+            name, "python-cffsubr",
+            "should strip _service:obs_scm: prefix"
         );
     }
 }

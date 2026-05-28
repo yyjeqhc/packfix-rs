@@ -7,6 +7,20 @@ use anyhow::{Result, bail};
 use regex::Regex;
 use tracing::warn;
 
+/// Strip OBS service output prefixes from a spec filename.
+///
+/// Files produced by `osc up -S` use names like
+/// `_service:obs_scm:python-cffsubr.spec`.  This function returns the
+/// base name (`python-cffsubr`) by stripping any `_service:<name>:` prefix.
+pub fn spec_file_basename(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    // Strip `_service:<service_name>:` prefix if present.
+    stem.strip_prefix("_service:")
+        .and_then(|s| s.find(':').map(|pos| &s[pos + 1..]))
+        .map(String::from)
+        .or_else(|| Some(stem.to_string()))
+}
+
 pub fn find_spec(workdir: &Path) -> Result<PathBuf> {
     let mut found = Vec::new();
     collect_specs(workdir, &mut found)?;
@@ -921,6 +935,39 @@ Provides:       python3-socks
     fn declared_package_name_skips_lines_without_colons() {
         let spec = "# comment line\n%global pypi_name bar\n\nName: python-bar\n";
         assert_eq!(declared_package_name(spec), Some("python-bar".into()));
+    }
+
+    #[test]
+    fn spec_file_basename_strips_service_prefix() {
+        assert_eq!(
+            spec_file_basename(Path::new("_service:obs_scm:python-cffsubr.spec")),
+            Some("python-cffsubr".into())
+        );
+    }
+
+    #[test]
+    fn spec_file_basename_strips_download_files_prefix() {
+        assert_eq!(
+            spec_file_basename(Path::new("_service:download_files:foo.spec")),
+            Some("foo".into())
+        );
+    }
+
+    #[test]
+    fn spec_file_basename_plain_name() {
+        assert_eq!(
+            spec_file_basename(Path::new("python-six.spec")),
+            Some("python-six".into())
+        );
+    }
+
+    #[test]
+    fn spec_file_basename_no_extension() {
+        // file_stem() returns the whole name when there's no dot
+        assert_eq!(
+            spec_file_basename(Path::new("python-six")),
+            Some("python-six".into())
+        );
     }
 
     #[test]
